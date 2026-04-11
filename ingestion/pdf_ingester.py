@@ -34,7 +34,6 @@ class PDFDocument:
     filename: str
     file_path: str
     doc_type: str = "pdf"
-    page_count: int = 0
     content_hash: str = ""
     markdown: str = ""
     document_date: str = ""
@@ -68,6 +67,8 @@ def _build_markdown_with_page_markers(doc) -> str:
     """
     Export Docling document to markdown with <!-- page N --> markers
     injected at each page boundary so chunkers can track provenance.
+    Each text element is separated by a blank line so RSM can detect
+    paragraph boundaries correctly.
     """
     lines = []
     current_page = None
@@ -78,11 +79,16 @@ def _build_markdown_with_page_markers(doc) -> str:
 
         # Inject page marker when page changes
         if page_no is not None and page_no != current_page:
-            lines.append(f"\n<!-- page {page_no} -->\n")
+            lines.append(f"<!-- page {page_no} -->")
             current_page = page_no
 
-        # Export the item as markdown
-        if hasattr(item, 'export_to_markdown'):
+        # SectionHeaderItem must be handled manually — export_to_markdown()
+        # on individual items does not add ## prefixes, only the full doc export does.
+        item_type = type(item).__name__
+        if item_type == "SectionHeaderItem":
+            level = getattr(item, 'level', 1)
+            md = f"{'#' * level} {item.text}"
+        elif hasattr(item, 'export_to_markdown'):
             try:
                 md = item.export_to_markdown(doc=doc)
             except TypeError:
@@ -93,9 +99,26 @@ def _build_markdown_with_page_markers(doc) -> str:
             continue
 
         if md and md.strip():
-            lines.append(md)
+            if '<!--' not in md:
+                if '|' in md:
+                    # Normalize table cell padding — skip separator rows
+                    cleaned_rows = []
+                    for row in md.split('\n'):
+                        if '|' in row and not re.match(r'^\|[\s\-:|]+\|$', row.strip()):
+                            cells = row.split('|')
+                            row = '|'.join(re.sub(r'  +', ' ', c).strip() for c in cells)
+                        cleaned_rows.append(row)
+                    md = '\n'.join(cleaned_rows)
+                else:
+                    # Normalize multiple spaces in regular text (OCR artifact)
+                    md = re.sub(r'  +', ' ', md).strip()
+            # Blank line after every element so RSM sees paragraph boundaries
+            lines.append(md + "\n")
 
-    return "\n".join(lines)
+    # Join and collapse excessive blank lines (3+ → 2)
+    result = "\n".join(lines)
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    return result.strip()
 
 
 def ingest_pdf(file_path: str) -> PDFDocument:
@@ -142,7 +165,6 @@ def ingest_pdf(file_path: str) -> PDFDocument:
     converter = DocumentConverter()
     result = converter.convert(str(path))
     doc = result.document
-    page_count = len(doc.pages) if doc.pages else 0
 
     # Build markdown with page markers injected at page boundaries
     markdown = _build_markdown_with_page_markers(doc)
@@ -162,7 +184,6 @@ def ingest_pdf(file_path: str) -> PDFDocument:
     return PDFDocument(
         filename=path.name,
         file_path=str(path.resolve()),
-        page_count=page_count,
         content_hash=content_hash,
         markdown=markdown,
         document_date=document_date,
@@ -171,7 +192,6 @@ def ingest_pdf(file_path: str) -> PDFDocument:
             "filename": path.name,
             "file_path": str(path.resolve()),
             "doc_type": "pdf",
-            "page_count": page_count,
             "content_hash": content_hash,
             "markdown_path": str(md_path.resolve()),
             "document_date": document_date,
