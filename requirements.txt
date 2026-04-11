@@ -1,0 +1,4 @@
+docling
+sentence-transformers
+elasticsearch==8.*
+ijson

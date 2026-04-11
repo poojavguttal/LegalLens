@@ -77,21 +77,22 @@ ES also provides built-in result highlighting (shows the exact matched passage i
 
 ---
 
-## [2026-04-11] Embedding Model — sentence-transformers/all-MiniLM-L6-v2
+## [2026-04-11] Embedding Model — sentence-transformers/all-mpnet-base-v2
 
-**Decision:** Use `sentence-transformers/all-MiniLM-L6-v2` for generating chunk embeddings.
+**Decision:** Use `sentence-transformers/all-mpnet-base-v2` for generating chunk embeddings.
 
 **Alternatives considered:**
 - OpenAI `text-embedding-3-small` — higher quality embeddings, but incurs API cost per chunk and introduces external dependency. Rejected for prototype.
 - OpenAI `text-embedding-3-large` — even higher quality, higher cost. Rejected.
-- `all-mpnet-base-v2` — better quality than MiniLM but ~3x slower. Overkill for prototype.
+- `all-MiniLM-L6-v2` — faster (~14K sentences/sec) but lower accuracy (384-dim vectors). Rejected because legal document search prioritises accuracy over embedding speed.
 - Legal-domain fine-tuned models (e.g. `legal-bert`) — better for legal terminology but harder to deploy and not available as a simple sentence-transformers model.
 
-**Reasoning:** `all-MiniLM-L6-v2` is free, runs locally, produces 384-dimension vectors, is fast (~14K sentences/sec on CPU), and is the most commonly used model in RAG prototypes. No API key, no cost, works in Docker with no GPU.
+**Reasoning:** `all-mpnet-base-v2` produces 768-dimension vectors with higher semantic accuracy than MiniLM. For legal documents, missing a relevant clause or contract term is a real risk — accuracy matters more than embedding speed. The slower embedding speed (~4K sentences/sec) is acceptable because embedding only runs once at ingestion time (one-time cost). At search time, Elasticsearch handles kNN lookup in milliseconds regardless of model choice — so the user-facing speed is not affected.
 
 **Trade-offs:**
-- Not fine-tuned on legal text — may miss domain-specific semantic relationships.
-- In production, a legal-domain model or OpenAI embeddings would improve retrieval quality.
+- ~3x slower than MiniLM at ingestion time — acceptable since embedding is a one-time cost per document.
+- Larger model size (~420MB vs 80MB) — acceptable for prototype.
+- Not fine-tuned on legal text — in production, a legal-domain model would improve retrieval quality further.
 
 ---
 
@@ -171,12 +172,67 @@ ES also provides built-in result highlighting (shows the exact matched passage i
 
 ---
 
+## [2026-04-11 15:30] PDF Ingestion — Skip Already Processed Files via SHA256 Hash
+
+**Decision:** On re-ingestion, compute SHA256 hash of the raw PDF bytes and compare against a stored `.hash` file. If hash matches, skip OCR and return the cached markdown.
+
+**Alternatives considered:**
+- Check if `.md` file exists only — simpler but doesn't detect file updates with the same filename. Explicitly rejected because the client flagged stale results as a pain point.
+- Store hashes in a central `processed.json` — adds a shared state file that becomes a bottleneck for concurrent ingestion.
+
+**Reasoning:** Per-file `.hash` sidecar is self-contained, requires no shared state, and correctly handles the case where a document is updated with the same filename — the core stale result problem the client raised.
+
+**Trade-offs:**
+- Two extra files per PDF (`.md` and `.hash`) in the source directory.
+- Hash comparison adds a negligible overhead (~1ms) per file.
+
+---
+
+## [2026-04-11 15:30] PDF Chunking — RSM (Recursive Split + Greedy Merge) for Text Sections
+
+**Decision:** Use RSM section tree chunking for non-table text in PDFs. Splits at `##` heading boundaries → paragraphs → sentences. Greedily merges adjacent segments up to a 512-token budget.
+
+**Alternatives considered:**
+- Recursive character chunker (fixed size, fixed overlap) — ignores document structure. Splits mid-clause or mid-sentence. Rejected.
+- Page-based chunking — page boundaries are arbitrary and split clauses. Rejected.
+- Structure-aware chunker — also evaluated. RSM was preferred because it handles both heading-structured and unstructured text gracefully via paragraph fallback.
+
+**Reasoning:** RSM was validated in prior chunking experiments. The section tree respects the document hierarchy that Docling's markdown output preserves.
+
+---
+
+## [2026-04-11 15:30] PDF Chunking — Tables as Atomic Chunks
+
+**Decision:** Markdown tables detected in the PDF output are always indexed as a single chunk, regardless of size. Tables are never split.
+
+**Alternatives considered:**
+- Convert table rows to KV blocks (key: value format) and apply RSM row tree — good for spreadsheets and compliance data. Rejected for PDFs because legal tables (payment schedules, defendant lists, obligation matrices) are semantically meaningful only as a whole unit.
+- Split large tables at row boundaries — risks splitting a payment schedule mid-entry, making the chunk meaningless.
+
+**Reasoning:** A 51-row defendant list split across two chunks is useless for retrieval — a lawyer searching for a defendant name needs the full context of which case and which side they appear on. Keeping tables atomic preserves this.
+
+**Trade-offs:**
+- Large tables may exceed the 512-token budget and produce oversized chunks. Accepted — Elasticsearch and the embedding model can handle larger inputs; retrieval accuracy matters more than strict token uniformity.
+
+---
+
+## [2026-04-11 15:30] PDF Chunking — Chunk Provenance Metadata
+
+**Decision:** Every chunk carries: `filename`, `file_path`, `doc_type`, `page_number`, `section_header`, `chunk_type`, `token_count`, `content_hash`, `document_date`.
+
+**Reasoning:** The client explicitly requires "document name, page number, section, date" in every result. `page_number` is derived from `<!-- page N -->` markers in the markdown. `section_header` is the nearest `##` heading above the chunk. `content_hash` links the chunk back to the exact version of the document it was extracted from — critical for stale result detection. `document_date` is extracted via two-step heuristic: filename regex (`YYYY-MM-DD`) first, then first-page content search (common date patterns).
+
+**Trade-offs:**
+- Date extraction is heuristic — works for well-named files and documents with a visible date on page 1. Will miss dates buried deep in the document body. Acceptable for prototype.
+
+---
+
 ## [2026-04-11] Deferred Features (Out of Scope for Prototype)
 
 | Feature | Reason Deferred |
 |---|---|
 | ZIP bundle ingestion (M&A due diligence) | Adds pre-processing layer with high complexity relative to prototype value |
-| Word document ingestion | Trivial to add (`python-docx`) but not architecturally interesting |
+| Word document ingestion | Trivial to add (`python-docx`) but not architecturally interesti<br/>ng |
 | XML ingestion | JSON covers the compliance story; XML adds schema complexity without differentiation |
 | Access controls enforcement | Designed into schema; implementation requires auth layer outside prototype scope |
 | Document summarisation | Would require LLM integration; outside retrieval prototype scope |
