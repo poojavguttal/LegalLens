@@ -370,9 +370,31 @@ def chunk_pdf(
         else:
             pass2.append(chunk)
 
-    # Re-index after merge
-    for i, chunk in enumerate(pass2):
+    # Pass 3: greedily merge consecutive section chunks up to token_budget.
+    # Sections with different headers are merged — the ## headings inside the text
+    # already identify each section boundary. Tables are never touched.
+    pass3 = []
+    for chunk in pass2:
+        if (
+            chunk.chunk_type == "section"
+            and pass3
+            and pass3[-1].chunk_type == "section"
+            and pass3[-1].token_count + chunk.token_count <= token_budget
+        ):
+            prev = pass3[-1]
+            prev.text = prev.text + "\n\n" + chunk.text
+            prev.token_count = _tokens(prev.text)
+            prev.metadata["token_count"] = prev.token_count
+            # Keep the first chunk's header; if blank, adopt this chunk's header
+            if not prev.section_header and chunk.section_header:
+                prev.section_header = chunk.section_header
+                prev.metadata["section_header"] = chunk.section_header
+        else:
+            pass3.append(chunk)
+
+    # Re-index after all merges
+    for i, chunk in enumerate(pass3):
         chunk.chunk_index = i
         chunk.metadata["chunk_index"] = i
 
-    return pass2
+    return pass3
