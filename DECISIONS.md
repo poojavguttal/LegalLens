@@ -252,6 +252,19 @@ ES also provides built-in result highlighting (shows the exact matched passage i
 Single emails carry neither field.
 ---
 
+## [2026-04-11] JSON Chunking — LEDGAR Compliance Data
+
+**Decision:** RSM-style greedy merge on LEDGAR `.jsonl`.
+
+**Split hierarchy (3 levels):**
+1. Whole record ≤ 512 → greedy merge adjacent records
+2. Record > 512 → split at key boundaries (`provision`, `label`, `source` each become a block), greedy merge those blocks
+3. Single key-value still > 512 → word-split that value (budget = 512 minus key prefix tokens)
+
+ (greedy merge) — 2.5x fewer, denser, all within token budget.
+
+---
+
 ## [2026-04-11] Deferred Features (Out of Scope for Prototype)
 
 | Feature | Reason Deferred |
