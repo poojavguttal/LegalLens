@@ -265,6 +265,17 @@ Single emails carry neither field.
 
 ---
 
+## [2026-04-11] Embedding — all-mpnet-base-v2
+
+**Decision:** Single `embed_chunks()` function accepts any chunk type (PDF, email, JSON) — all share a `.text` field.
+
+- Model loaded once, reused across calls (lazy singleton)
+- Batch size 64 — processes in parallel, not one-by-one
+- `normalize_embeddings=True` — unit vectors, dot product = cosine similarity (faster in ES)
+- Output: flat dict with all chunk fields + 768-dim `embedding` vector, ready for ES indexing
+
+---
+
 ## [2026-04-11] Deferred Features (Out of Scope for Prototype)
 
 | Feature | Reason Deferred |
