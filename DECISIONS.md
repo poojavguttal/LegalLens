@@ -227,6 +227,31 @@ ES also provides built-in result highlighting (shows the exact matched passage i
 
 ---
 
+## [2026-04-11] Email Ingestion — Plain Text Enron Format
+
+**Decision:** Custom ingester (`email_ingester.py`) instead of Python's `email` stdlib.
+
+**Reasoning:** The Enron export format is not valid RFC 2822 — `To:` values are Python list reprs (`['a@enron.com' 'b@enron.com']`), `File-Name` is a non-standard header, and quoted history is embedded in the body rather than as MIME parts. The stdlib parser silently fails on these. A line-by-line parser gives full control over these quirks.
+
+**Key decisions inside the ingester:**
+- **Multi-line headers** (Cc, Bcc spanning two lines): tracked `last_key` and appended continuation lines (starting with whitespace) to the previous header value.
+- **Reply chain parsing**: split body on `-----Original Message-----` and `----- Forwarded by -----` markers via regex. Two separate extractors handle each format's different header layout.
+
+---
+
+## [2026-04-11] Email Chunking — One Email = One Chunk
+
+**Decision:** Each email is stored as a single chunk. Only split at paragraph boundaries if body exceeds 512 tokens.
+
+**Reasoning:** Emails are already short conversational units. Splitting mid-email breaks meaning. The full thread history (quoted text) stays in `text` — it gives the embedding model full context for who said what.
+
+**Fragment fields** (only on split emails):
+- `parent_chunk_index` — all fragments point to the first chunk's index for ES reassembly
+- `fragment_index` — 1-based position within the split
+
+Single emails carry neither field.
+---
+
 ## [2026-04-11] Deferred Features (Out of Scope for Prototype)
 
 | Feature | Reason Deferred |
