@@ -101,7 +101,7 @@ class TestRelevanceGate:
         knn_hits  = [_hit("doc_a", 0.9), _hit("doc_b", 0.85)]
         es = _mock_es(bm25_hits, knn_hits)
 
-        results = search("who is Rahul Gandhi", es=es)
+        results = search("what is the weather today", es=es)
         assert results == [], "Expected 0 results when BM25 has no hits"
 
     @patch("retrieval.search.embed_texts", return_value=[[0.1] * 768])

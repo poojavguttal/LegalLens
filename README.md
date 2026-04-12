@@ -1,4 +1,5 @@
-Here’s your revised version with all em dashes removed and replaced with clean punctuation or sentence breaks:
+# LegalLens
+Intelligent legal document search with hybrid retrieval and source citations.
 
 ---
 
@@ -92,31 +93,27 @@ The current prototype handles hundreds of documents. At 2 million documents, eve
 
 ---
 
-If you want, I can also tighten the writing further to make it sound more like a polished portfolio or interview-ready explanation.
-
 ## How to Run
 
 ### Prerequisites
 - Docker and Docker Compose
 - Python 3.10+
 
-### 1. Start Elasticsearch
+---
+
+### Option A: Run with Docker (recommended)
+
+The easiest way to run everything — no Python environment setup needed.
+
+**1. Build and start both ES and the app:**
 
 ```bash
-docker-compose up -d
+docker-compose up --build
 ```
 
-Wait ~20 seconds for ES to be ready. Check: `curl http://localhost:9200` — should return cluster info.
+This starts Elasticsearch and waits for it to be healthy before the app container is ready.
 
-### 2. Set up Python environment
-
-```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 3. Add your data
+**2. Add your data:**
 
 ```
 sample_data/
@@ -125,21 +122,72 @@ sample_data/
   compliance/    ← put .jsonl files here (LEDGAR format)
 ```
 
-### 4. Ingest
+**3. Ingest:**
 
 ```bash
-# Run all pipelines
+docker-compose run app python ingest.py --all
+
+# Or individually
+docker-compose run app python ingest.py --pdfs
+docker-compose run app python ingest.py --emails
+docker-compose run app python ingest.py --compliance --max-records 2000
+
+# Wipe and re-index from scratch
+docker-compose run app python ingest.py --all --recreate
+```
+
+**4. Search:**
+
+```bash
+docker-compose run app python search_cli.py
+```
+
+**5. Run tests:**
+
+```bash
+docker-compose run app python -m pytest tests/ -v -m "not integration"
+```
+
+---
+
+### Option B: Run locally (without Docker)
+
+**1. Start Elasticsearch only:**
+
+```bash
+docker-compose up -d elasticsearch
+```
+
+Wait ~20 seconds. Check: `curl http://localhost:9200`
+
+**2. Set up Python environment:**
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+**3. Add your data:**
+
+```
+sample_data/
+  contracts/     ← put PDF files here
+  emails/        ← put plain-text email files here
+  compliance/    ← put .jsonl files here (LEDGAR format)
+```
+
+**4. Ingest:**
+
+```bash
 python ingest.py --all
 
-# Or run individually
+# Or individually
 python ingest.py --pdfs
 python ingest.py --emails
-python ingest.py --compliance
-
-# Limit LEDGAR records (full LEDGAR = ~374K records, takes ~2 hours to embed)
 python ingest.py --compliance --max-records 2000
 
-# Wipe ES index and re-index from scratch
+# Wipe and re-index from scratch
 python ingest.py --all --recreate
 ```
 
@@ -149,7 +197,7 @@ Ingestion saves intermediate files:
 - `sample_data/emails/chunks_output.json` — email chunks
 - `sample_data/compliance/chunks_output.json` — compliance chunks
 
-### 5. Search
+**5. Search:**
 
 ```bash
 python search_cli.py
@@ -163,12 +211,12 @@ Example queries that work well:
 - `termination upon written notice`
 - `governing law New York arbitration`
 
-Off-topic queries (e.g. `who is Rahul Gandhi`) return zero results — by design.
+Off-topic queries (e.g. `what is the weather today`) return zero results — by design.
 
-### 6. Run Tests
+**6. Run tests:**
 
 ```bash
-# Unit tests only — no ES required, runs in < 5 seconds
+# Unit tests only — no ES required
 python -m pytest tests/ -v -m "not integration"
 
 # All tests including integration — requires ES running with indexed data
@@ -190,6 +238,7 @@ LegalLens/
 ├── sample_data/        # contracts/, emails/, compliance/
 ├── ingest.py           # Full ingestion pipeline CLI
 ├── search_cli.py       # Interactive search interface
-├── docker-compose.yml  # Elasticsearch 8 single-node
+├── Dockerfile          # App container (Python 3.11 + dependencies)
+├── docker-compose.yml  # ES + app services with healthcheck
 └── DECISIONS.md        # Full reasoning behind every architectural choice
 ```
