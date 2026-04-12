@@ -276,6 +276,54 @@ Single emails carry neither field.
 
 ---
 
+
+## [2026-04-12] ES Index Design — Single Index, Unified Mapping
+
+**Decision:** All three document types (PDF, email, JSON) are stored in a single ES index `legallens` with a shared flat mapping.
+
+**Alternatives considered:**
+- One index per document type (`legallens_pdf`, `legallens_email`, `legallens_json`) — cleaner schema isolation but requires cross-index queries at search time, complicates RRF merging, and adds operational overhead.
+- Dynamic mapping (no explicit schema) — ES infers field types on first write. Rejected because it can mis-type fields (e.g. `page_number` inferred as `text` instead of `integer`) and dense vector fields require explicit `dims` and `similarity` to be set upfront.
+
+**Mapping design:**
+- `text` → `text` (full-text BM25 indexed)
+- `embedding` → `dense_vector` (768 dims, `dot_product` similarity, `index: true` for kNN)
+- Keyword/filter fields (`chunk_type`, `filename`, `sender`, `date`) → `keyword` (exact match, no tokenisation)
+- Numeric fields (`page_number`, `token_count`, `chunk_index`) → `integer`
+- `number_of_replicas: 0` — single-node local setup; replicas would be needed in production
+
+**`_id` strategy:** `{filename}_{chunk_index}` — deterministic, collision-free across document types, enables idempotent re-indexing (same doc re-indexed overwrites previous version without duplicates).
+
+**Bulk indexing:** Used `elasticsearch.helpers.bulk()` for all ingestion — batches writes into a single HTTP request per chunk type, significantly faster than individual `index()` calls.
+
+---
+
+## [2026-04-12] Retrieval — Manual RRF (Reciprocal Rank Fusion) in Python
+
+**Decision:** Implement RRF manually in Python using two separate ES queries (BM25 + kNN), rather than using ES's built-in `retriever.rrf`.
+
+**Why not native ES RRF:** ES native RRF requires a Platinum licence. Attempting it on the basic licence throws `AuthorizationException`. Upgrading the image version (8.13 → 8.14) did not resolve this.
+
+**Implementation:**
+```
+RRF score = 1/(k + rank_bm25 + 1) + 1/(k + rank_knn + 1)   where k = 60
+```
+Both BM25 and kNN each return a ranked window of `top_k × 10` candidates. RRF merges them in Python. Docs appearing in only one list still get a partial score (union, not intersection).
+
+**Relevance gate:** A minimum RRF score of `0.020` is applied before returning results. A doc ranked #1 in only one list scores `1/61 ≈ 0.0164` — below the threshold. A doc that ranks well in both lists scores above `0.020` and is returned. This filters out off-topic queries  which get kNN-only hits with no BM25 lexical anchor.
+
+**Trade-off:** The threshold is calibrated for the current small corpus. With a larger corpus and more docs, RRF scores compress further and the threshold may need lowering.
+
+---
+
+## [2026-04-12] Search CLI — Interactive Search Interface
+
+**Decision:** Simple interactive CLI (`search_cli.py`) using `input()` loop — no web server, no API layer.
+
+**Reasoning:** The prototype goal is to demonstrate retrieval quality, not UI polish. A CLI is the fastest path to a working demo. The `_provenance()` helper formats: file, page, section, date, sender, subject, source — covering all three document types in one display function.
+
+---
+
 ## [2026-04-11] Deferred Features (Out of Scope for Prototype)
 
 | Feature | Reason Deferred |

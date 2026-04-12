@@ -1,5 +1,5 @@
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 # ── Token estimate ─────────────────────────────────────────────────────────────
@@ -18,21 +18,10 @@ class Chunk:
     token_count: int
     section_header: str = ""
     page_number: int = 0
-    metadata: dict = field(default_factory=dict)
-
-    def _build_metadata(self, filename: str, doc_type: str,
-                        document_date: str, content_hash: str) -> dict:
-        return {
-            "filename": filename,
-            "doc_type": doc_type,
-            "document_date": document_date,
-            "content_hash": content_hash,
-            "page_number": self.page_number,
-            "section_header": self.section_header,
-            "chunk_type": self.chunk_type,
-            "chunk_index": self.chunk_index,
-            "token_count": self.token_count,
-        }
+    filename: str = ""
+    doc_type: str = "pdf"
+    document_date: str = ""
+    content_hash: str = ""
 
 
 # ── Text cleaning ──────────────────────────────────────────────────────────────
@@ -295,8 +284,11 @@ def chunk_pdf(
                 token_count=_tokens(body),
                 section_header=ctx.lstrip('#').strip(),
                 page_number=page,
+                filename=filename,
+                doc_type=doc_type,
+                document_date=document_date,
+                content_hash=content_hash,
             )
-            chunk.metadata = chunk._build_metadata(filename, doc_type, document_date, content_hash)
             chunks.append(chunk)
             chunk_index += 1
 
@@ -315,8 +307,11 @@ def chunk_pdf(
                 token_count=tok,
                 section_header="",
                 page_number=page_no,
+                filename=filename,
+                doc_type=doc_type,
+                document_date=document_date,
+                content_hash=content_hash,
             )
-            chunk.metadata = chunk._build_metadata(filename, doc_type, document_date, content_hash)
             chunks.append(chunk)
             chunk_index += 1
         else:
@@ -350,7 +345,6 @@ def chunk_pdf(
             prev = pass1[-1]
             prev.text = prev.text + "\n\n" + chunk.text
             prev.token_count = _tokens(prev.text)
-            prev.metadata["token_count"] = prev.token_count
         else:
             pass1.append(chunk)
 
@@ -363,16 +357,12 @@ def chunk_pdf(
             and next_chunk
             and next_chunk.chunk_type == "table"
         ):
-            # Prepend this chunk's text to the next table chunk
             next_chunk.text = chunk.text + "\n\n" + next_chunk.text
             next_chunk.token_count = _tokens(next_chunk.text)
-            next_chunk.metadata["token_count"] = next_chunk.token_count
         else:
             pass2.append(chunk)
 
     # Pass 3: greedily merge consecutive section chunks up to token_budget.
-    # Sections with different headers are merged — the ## headings inside the text
-    # already identify each section boundary. Tables are never touched.
     pass3 = []
     for chunk in pass2:
         if (
@@ -384,17 +374,13 @@ def chunk_pdf(
             prev = pass3[-1]
             prev.text = prev.text + "\n\n" + chunk.text
             prev.token_count = _tokens(prev.text)
-            prev.metadata["token_count"] = prev.token_count
-            # Keep the first chunk's header; if blank, adopt this chunk's header
             if not prev.section_header and chunk.section_header:
                 prev.section_header = chunk.section_header
-                prev.metadata["section_header"] = chunk.section_header
         else:
             pass3.append(chunk)
 
     # Re-index after all merges
     for i, chunk in enumerate(pass3):
         chunk.chunk_index = i
-        chunk.metadata["chunk_index"] = i
 
     return pass3
