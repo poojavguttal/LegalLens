@@ -324,6 +324,33 @@ Both BM25 and kNN each return a ranked window of `top_k × 10` candidates. RRF m
 
 ---
 
+## [2026-04-12] Testing Strategy
+
+**Decision:** Two-tier test suite: fast unit tests (mocked ES, no external deps) + integration tests (real ES + indexed data, marked separately).
+
+**Unit tests (`tests/test_chunking.py`):**
+- PDF, email, and JSON chunkers tested in isolation — no ES, no embedding model
+- Validates: chunk count, token budget never exceeded, table detection, flat metadata propagation, fragment splitting and indexing, greedy merge, KV split, word fallback, empty body handling
+- Uses in-memory fixtures (markdown strings, tmp_path JSONL files) — runs in < 1s
+
+**Unit tests (`tests/test_retrieval.py`):**
+- ES client replaced with `unittest.mock.MagicMock` that returns canned BM25/kNN hit lists
+- Validates: RRF formula correctness, score ordering, relevance gate (MIN_RRF_SCORE), top_k cap, empty-list handling, RRF merge speed (< 50ms for 50 candidates)
+- No network calls, no embedding model — deterministic and fast
+
+**Integration tests (`tests/test_retrieval.py`, marked `@pytest.mark.integration`):**
+- Run against live ES with the full indexed corpus
+- Use real queries sourced from actual indexed documents (CUAD contracts, Enron emails)
+- Validates: real results returned for legal queries, off-topic queries return nothing, all fields present, end-to-end latency < 2s
+
+**Run commands:**
+```
+python -m pytest tests/ -v -m "not integration"   # unit tests only (no ES needed)
+python -m pytest tests/ -v                          # all tests (requires ES running)
+```
+
+---
+
 ## [2026-04-11] Deferred Features (Out of Scope for Prototype)
 
 | Feature | Reason Deferred |

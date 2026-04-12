@@ -6,7 +6,8 @@ from embedding.embedder import embed_texts
 
 logger = logging.getLogger("search")
 
-_RRF_K = 60   # RRF rank constant
+_RRF_K        = 60     # RRF rank constant
+MIN_RRF_SCORE = 0.020  # minimum score to return a result
 
 
 def search(
@@ -81,11 +82,6 @@ def search(
         if doc_id in knn_rank:
             score += 1 / (_RRF_K + knn_rank[doc_id] + 1)
         scores[doc_id] = score
-
-    # Minimum RRF score to be returned.
-    # A doc at rank 0 in only one list scores 1/(60+1) ≈ 0.0164.
-    # Require at least that much from BOTH lists combined → threshold > 0.0164.
-    MIN_RRF_SCORE = 0.020
 
     ranked  = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
     results = []

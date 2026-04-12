@@ -35,3 +35,6 @@ env/
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Large data files
+sample_data/compliance/*.jsonl
