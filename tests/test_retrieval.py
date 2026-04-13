@@ -184,7 +184,7 @@ class TestSearchIntegration:
 
     def test_results_have_required_fields(self):
         """Every result must have text and chunk_type fields."""
-        results = search("", top_k=5)
+        results = search("Dr. Mahendra Amin was accused for what reason", top_k=5)
         for r in results:
             assert "text"       in r, "Missing 'text' field"
             assert "chunk_type" in r, "Missing 'chunk_type' field"
