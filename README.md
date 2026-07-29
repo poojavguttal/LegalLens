@@ -5,9 +5,9 @@ Intelligent legal document search with hybrid retrieval and source citations.
 
 ## What I Built and Why
 
-LegalLens is a hybrid search system for legal documents. It ingests three document types: PDF contracts, plain-text emails, and JSON compliance provisions. It chunks them with structure-aware logic, embeds them with a local sentence transformer, and indexes them into Elasticsearch. At query time, it runs BM25 full-text search and kNN vector search in parallel, merges results via Reciprocal Rank Fusion (RRF), and returns the top results with full provenance (filename, page, section, date, sender).
+LegalLens is a research assistant for legal documents. Point it at a mix of contracts, emails, and compliance filings, ask a plain-language question, and it reads across all of them to give you a short, cited answer — with the option to open the original document and see exactly where each answer came from.
 
-The core problem I was solving: legal search fails when it is purely keyword-based because it misses semantically related clauses, or purely semantic because it returns confidently wrong results for off-topic queries. Hybrid search fixes both. A lawyer searching "circumstances preventing contract performance" finds force majeure clauses (semantic).
+I built it because legal research is usually one of two bad experiences: a keyword search that misses anything not phrased exactly the way the document is, or a chatbot that sounds confident but isn't actually grounded in your documents. LegalLens is meant to be neither — it only answers from what it actually finds in your files, shows its confidence in each source, and always lets you verify the answer against the original page.
 
 ---
 
