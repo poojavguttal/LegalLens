@@ -11,22 +11,6 @@ The core problem I was solving: legal search fails when it is purely keyword-bas
 
 ---
 
-## What I Left Out and Why
-
-**Word documents (.docx):** Trivial to add via `python-docx` but adds no architectural differentiation. The three chosen types demonstrate three fundamentally different ingestion and chunking strategies:
-
-* OCR-based (PDF)
-* Metadata-rich plain text (email)
-* Schema-inconsistent structured data (JSON)
-
-**ZIP bundle ingestion:** Relevant for M&A due diligence since documents arrive as ZIP archives. Requires a pre-processing layer to extract, classify, and route to the right ingester. Deferred due to time constraint.
-
-**XML ingestion:** A valid compliance format such as RegTrack exports. JSON covers the same compliance story, so supporting XML in parallel adds schema complexity without differentiation. Deferred due to time constraint.
-
-**Access controls enforcement:** The schema is designed for it. The ES Platinum version handles document-level access control.
-
----
-
 ## Architectural Decisions
 
 **Elasticsearch over ChromaDB or Qdrant:** ChromaDB is purpose-built for vector search but has no native full-text (BM25) capability. Legal documents require exact keyword matching such as clause numbers, regulation citations, party names, and dates that semantic search alone misses. ES 8 provides both BM25 and kNN in a single index, merged natively. It is also the established standard in legal tech and enterprise search.
@@ -82,14 +66,6 @@ The current prototype handles hundreds of documents. At 2 million documents, eve
 **Retrieval:**
 
 * Add ES document-level security for access controls so each chunk carries a `matter_id`, and queries are filtered by the authenticated user's clearance
-
----
-
-## What I Would Do Differently With More Time
-
-**Query understanding layer.** Currently, queries go directly to ES. A lightweight NLP step before search could detect query type, extract named entities such as party names, dates, and clause types, and inject filters into ES accordingly.
-
-**Proper evaluation harness.** The integration tests validate that legal queries return results and off-topic queries do not, but they do not measure precision or recall. With more time, I would build an evaluation set of 50 queries with ground-truth relevant documents from CUAD and measure nDCG@5 and MRR.
 
 ---
 
