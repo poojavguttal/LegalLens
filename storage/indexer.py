@@ -50,6 +50,8 @@ MAPPING = {
             # --- JSON fields ---
             "record_index":          {"type": "integer"},
             "record_fragment_index": {"type": "integer"},
+            "source_documents":      {"type": "keyword"},
+            "provision_labels":      {"type": "keyword"},
         }
     },
     "settings": {

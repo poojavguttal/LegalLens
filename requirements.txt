@@ -2,3 +2,7 @@ docling
 sentence-transformers
 elasticsearch==8.*
 ijson
+anthropic
+streamlit
+python-dotenv
+pymupdf

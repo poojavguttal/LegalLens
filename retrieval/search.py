@@ -3,45 +3,77 @@ from elasticsearch import Elasticsearch
 
 from storage.es_client import get_client, INDEX
 from embedding.embedder import embed_texts
+from retrieval.confidence import cosine_from_es_score, score_confidence
 
 logger = logging.getLogger("search")
 
 _RRF_K        = 60     # RRF rank constant
 MIN_RRF_SCORE = 0.020  # minimum score to return a result
 
+# Map NLI doc_type labels → ES filter clauses.
+# Only the PDF chunker sets doc_type; EmailChunk and JsonChunk don't have the
+# field, so those two filter on chunk_type instead. Filtering emails on
+# doc_type matches nothing and silently empties the result set.
+_DOC_TYPE_FILTERS = {
+    "pdf":        {"term":  {"doc_type": "pdf"}},
+    "email":      {"terms": {"chunk_type": ["email", "email_fragment"]}},
+    "compliance": {"term":  {"chunk_type": "json_provision"}},
+}
+
+
+def _build_es_filters(filters: dict | None) -> list[dict]:
+    """Convert NLI filter dict → list of ES query DSL filter clauses."""
+    if not filters:
+        return []
+    clauses = []
+    doc_type = filters.get("doc_type")
+    if doc_type and doc_type in _DOC_TYPE_FILTERS:
+        clauses.append(_DOC_TYPE_FILTERS[doc_type])
+    if filters.get("date_from"):
+        clauses.append({"range": {"document_date": {"gte": filters["date_from"]}}})
+    if filters.get("date_to"):
+        clauses.append({"range": {"document_date": {"lte": filters["date_to"]}}})
+    return clauses
+
 
 def search(
     query: str,
     top_k: int = 5,
     es: Elasticsearch = None,
+    filters: dict | None = None,
 ) -> list[dict]:
     """
-    Hybrid search: BM25 full-text + kNN vector search, merged via score-based fusion.
+    Hybrid search: BM25 full-text + kNN vector search, merged via RRF.
 
-    Final score = 0.4 * norm_bm25 + 0.6 * adjusted_knn
+    Optional `filters` dict (from NLI query_processor) supports:
+      doc_type  → "pdf" | "email" | "compliance"
+      date_from → "YYYY-MM-DD"
+      date_to   → "YYYY-MM-DD"
 
-    - kNN uses dot_product on normalised vectors → ES score in [0, 1] where
-      0.5 = orthogonal (no match), 1.0 = identical. Shifted and scaled to [0, 1]
-      so unrelated docs score ~0 instead of ~0.5.
-    - BM25 score normalised by max score in the result window → [0, 1].
-    - Results below RELEVANCE_THRESHOLD are dropped entirely.
+    Results below MIN_RRF_SCORE are dropped (relevance gate).
     """
     if es is None:
         es = get_client()
 
-    query_vector = embed_texts([query])[0]
-    window       = top_k * 10
-    source       = {"excludes": ["embedding"]}
+    query_vector   = embed_texts([query])[0]
+    window         = top_k * 10
+    source         = {"excludes": ["embedding"]}
+    filter_clauses = _build_es_filters(filters)
 
     # BM25
+    if filter_clauses:
+        bm25_query = {"bool": {"must": {"match": {"text": query}}, "filter": filter_clauses}}
+    else:
+        bm25_query = {"match": {"text": query}}
+
     bm25_resp = es.search(index=INDEX, body={
-        "query": {"match": {"text": query}},
-        "size":  window,
+        "query":   bm25_query,
+        "size":    window,
         "_source": source,
     })
 
     # kNN
-    knn_resp = es.search(index=INDEX, body={
+    knn_body: dict = {
         "knn": {
             "field":          "embedding",
             "query_vector":   query_vector,
@@ -49,7 +81,12 @@ def search(
         },
         "size":    window,
         "_source": source,
-    })
+    }
+    if filter_clauses:
+        knn_filter = filter_clauses[0] if len(filter_clauses) == 1 else {"bool": {"filter": filter_clauses}}
+        knn_body["knn"]["filter"] = knn_filter
+
+    knn_resp = es.search(index=INDEX, body=knn_body)
 
     bm25_hits = bm25_resp["hits"]["hits"]
     knn_hits  = knn_resp["hits"]["hits"]
@@ -66,6 +103,10 @@ def search(
     # Build rank maps (0-based) over the remaining hits
     bm25_rank: dict[str, int] = {h["_id"]: rank for rank, h in enumerate(bm25_hits)}
     knn_rank:  dict[str, int] = {h["_id"]: rank for rank, h in enumerate(knn_hits)}
+    # Keep the raw similarity — RRF discards it, and confidence needs it back
+    cosines:   dict[str, float] = {
+        h["_id"]: cosine_from_es_score(h["_score"]) for h in knn_hits
+    }
 
     docs_map: dict[str, dict] = {}
     for h in bm25_hits:
@@ -90,6 +131,16 @@ def search(
             break   # sorted descending — nothing after this passes either
         result           = docs_map[doc_id]
         result["_score"] = round(score, 6)
+        # RRF orders the results; confidence explains them. See retrieval/confidence.py
+        result["_signals"] = {
+            "cosine":    cosines.get(doc_id),
+            "bm25_rank": bm25_rank.get(doc_id),
+            "knn_rank":  knn_rank.get(doc_id),
+        }
+        result["_confidence"] = score_confidence(
+            cosine    = cosines.get(doc_id),
+            bm25_rank = bm25_rank.get(doc_id),
+        )
         results.append(result)
 
     logger.info(f"Query '{query[:50]}' → {len(results)} results")

@@ -25,7 +25,8 @@ while True:
     print("=" * 70)
 
     for i, r in enumerate(results, 1):
-        print(f"\n[{i}]  score={r['_score']}  |  type={r.get('chunk_type','')}")
+        confidence = round(r.get("_confidence", 0) * 100)
+        print(f"\n[{i}]  {confidence}% confidence  |  rrf={r['_score']}  |  type={r.get('chunk_type','')}")
         print(f"     {_provenance(r)}")
         print(f"\n     {r['text']}")
         print("-" * 70)

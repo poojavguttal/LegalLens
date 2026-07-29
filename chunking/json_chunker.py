@@ -1,6 +1,6 @@
 import logging
 import ijson
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from chunking.pdf_chunker import _tokens
 
@@ -15,9 +15,35 @@ class JsonChunk:
     token_count: int = 0
     record_index: int = -1           # which record in the JSONL file
     record_fragment_index: int = -1  # which fragment of that record (-1 = not split)
+    # Citation metadata — distinct values across every record merged into this chunk
+    source_documents: list[str] = field(default_factory=list)
+    provision_labels: list[str] = field(default_factory=list)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _distinct(values: list[str]) -> list[str]:
+    """Dedupe while preserving order."""
+    seen, out = set(), []
+    for v in values:
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def _record_source(record: dict) -> str:
+    """The originating filing path for a LEDGAR record ('' if absent)."""
+    return str(record.get("source") or "").strip()
+
+
+def _record_labels(record: dict) -> list[str]:
+    """Provision labels for a LEDGAR record — normalised to a list of strings."""
+    labels = record.get("label") or []
+    if isinstance(labels, str):
+        labels = [labels]
+    return [str(x).strip() for x in labels if str(x).strip()]
+
 
 def _split_by_words(text: str, token_budget: int) -> list[str]:
     """Fallback: split a single oversized string at word boundaries."""
@@ -102,21 +128,28 @@ def chunk_ledgar_file(
     pending_text  : list[str] = []
     pending_tok   = 0
     pending_records: list[int] = []
+    pending_sources: list[str] = []
+    pending_labels : list[str] = []
 
     def flush():
         nonlocal chunk_index, pending_text, pending_tok, pending_records
+        nonlocal pending_sources, pending_labels
         if not pending_text:
             return
         chunks.append(JsonChunk(
-            chunk_index  = chunk_index,
-            text         = "\n\n".join(pending_text),
-            token_count  = pending_tok,
-            record_index = pending_records[0] if len(pending_records) == 1 else -1,
+            chunk_index      = chunk_index,
+            text             = "\n\n".join(pending_text),
+            token_count      = pending_tok,
+            record_index     = pending_records[0] if len(pending_records) == 1 else -1,
+            source_documents = _distinct(pending_sources),
+            provision_labels = _distinct(pending_labels),
         ))
         chunk_index     += 1
         pending_text     = []
         pending_tok      = 0
         pending_records  = []
+        pending_sources  = []
+        pending_labels   = []
 
     records_seen = 0
     with open(file_path, "rb") as fh:
@@ -127,6 +160,8 @@ def chunk_ledgar_file(
 
             kv_text = _format_record(record)
             tok     = _tokens(kv_text)
+            source  = _record_source(record)
+            labels  = _record_labels(record)
 
             if tok > token_budget:
                 flush()
@@ -139,6 +174,8 @@ def chunk_ledgar_file(
                         token_count           = _tokens(frag_text),
                         record_index          = records_seen,
                         record_fragment_index = frag_i + 1,
+                        source_documents      = [source] if source else [],
+                        provision_labels      = labels,
                     ))
                     chunk_index += 1
             else:
@@ -147,6 +184,9 @@ def chunk_ledgar_file(
                 pending_text.append(kv_text)
                 pending_tok += tok
                 pending_records.append(records_seen)
+                if source:
+                    pending_sources.append(source)
+                pending_labels.extend(labels)
 
             records_seen += 1
             if max_records and records_seen >= max_records:

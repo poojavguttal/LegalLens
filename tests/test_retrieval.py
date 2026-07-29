@@ -8,10 +8,15 @@ Run unit tests only:   python -m pytest tests/test_retrieval.py -v -m "not integ
 Run all (needs ES):    python -m pytest tests/test_retrieval.py -v
 """
 import time
+from dataclasses import fields
+
 import pytest
 from unittest.mock import MagicMock, patch
 
-from retrieval.search import search, _RRF_K, MIN_RRF_SCORE
+from chunking.email_chunker import EmailChunk
+from chunking.json_chunker import JsonChunk
+from chunking.pdf_chunker import Chunk
+from retrieval.search import search, _build_es_filters, _DOC_TYPE_FILTERS, _RRF_K, MIN_RRF_SCORE
 
 
 # ── Mock ES hit factory ────────────────────────────────────────────────────────
@@ -133,6 +138,55 @@ class TestRelevanceGate:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# doc_type Filters — must target fields the chunkers actually write
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestDocTypeFilters:
+    """
+    Only the PDF chunker sets doc_type. Filtering emails or provisions on that
+    field matches nothing and silently empties the result set — the failure mode
+    looks identical to "nothing was indexed".
+    """
+
+    def _filtered_fields(self, doc_type: str) -> set[str]:
+        clauses = _build_es_filters({"doc_type": doc_type})
+        fields  = set()
+        for clause in clauses:
+            for body in clause.values():        # {"term": {...}} / {"terms": {...}}
+                fields.update(body.keys())
+        return fields
+
+    def test_pdf_filters_on_doc_type(self):
+        assert self._filtered_fields("pdf") == {"doc_type"}
+
+    def test_email_filters_on_chunk_type(self):
+        """EmailChunk has no doc_type field."""
+        assert self._filtered_fields("email") == {"chunk_type"}
+
+    def test_compliance_filters_on_chunk_type(self):
+        """JsonChunk has no doc_type field."""
+        assert self._filtered_fields("compliance") == {"chunk_type"}
+
+    def test_email_filter_covers_split_emails(self):
+        """Long emails are chunked as email_fragment — both must survive."""
+        clause = _DOC_TYPE_FILTERS["email"]
+        assert set(clause["terms"]["chunk_type"]) == {"email", "email_fragment"}
+
+    def test_filter_fields_exist_on_their_chunk_dataclass(self):
+        """Guard against a chunker dropping a field a filter depends on."""
+        assert "doc_type"   in {f.name for f in fields(Chunk)}
+        assert "chunk_type" in {f.name for f in fields(EmailChunk)}
+        assert "chunk_type" in {f.name for f in fields(JsonChunk)}
+
+    def test_unknown_doc_type_is_ignored(self):
+        assert _build_es_filters({"doc_type": "memo"}) == []
+
+    def test_no_filters_when_empty(self):
+        assert _build_es_filters(None) == []
+        assert _build_es_filters({}) == []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Speed Tests (Unit — mocked ES, measuring Python logic only)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -207,7 +261,7 @@ class TestSearchIntegration:
 
     def test_email_chunks_returned_for_email_query(self):
         """Email-specific query should return email chunks."""
-        results = search("Can you pull the longest threads in the email?", top_k=5)
+        results = search("RE: EWEB Schedule to the Master Agreement", top_k=5)
         if results:
             types = [r.get("chunk_type") for r in results]
             assert any(t == "email" for t in types)
